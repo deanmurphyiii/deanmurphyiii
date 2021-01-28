@@ -1,0 +1,946 @@
+###########################################################################################################
+### Detecting Stick Slip Presence from Downhole Vibration Data Using Machine Learning & Neural Networks ###
+###########################################################################################################
+############################################ By: Dean Murphy ##############################################
+###########################################################################################################
+
+########################
+### Loading packages ###
+########################
+
+import io
+import os
+import os.path
+import pandas, sys
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.ticker as tick
+import matplotlib.patches as patches
+#Outputs plots without typing plt.show() after each plot
+%matplotlib inline 
+import statistics
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier, export_graphviz, plot_tree
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix
+from collections import Counter
+import itertools
+
+from numpy import std
+from numpy import dstack
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import Flatten
+from keras.layers import Dropout
+from keras.layers import LSTM
+from keras.utils import to_categorical
+from matplotlib import pyplot
+
+import tensorflow as tf
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import accuracy_score
+
+###########################################
+### Cegal Tools Download & Sample Codes ###
+###########################################
+#[NOT USED]!pip install cegaltools
+#from cegaltools.plotting import CegalWellPlotter as cwp
+#Logging_df = NoGaps_df.set_index('DateTime')
+#cwp.plot_correlation(df=Logging_df)
+#cwp.plot_logs(df=Logging_df, 
+              #logs=['Temperature_°C','TorsionalVibe_deg_per_s_sq', 'WhirlFrequency_Hz', 
+              #'WhirlRadius_mm', 'StickSlipIndicator_N/A', 'LateralVibe_g', 
+              #'CleanTorsional_ZeroBad_OneGood', 'AxialVibe_g'])
+
+######################
+### Keras Download ###
+######################
+!pip install keras
+
+###########################
+### TensorFlow Download ###
+###########################
+!pip install tensorflow
+
+
+##########################
+### Defining Functions ###
+##########################
+
+def CSVs2Pandas( CSV_directory ):
+    """Combines CSVs to a Pandas dataframe from a directory. Returns combined CSV dataframe.""" 
+    
+    #Initiate list of CSVs
+    CSVList = []
+
+    #Iterate thru each CSV inside the directory
+    for file in os.listdir( CSV_directory ):
+    
+    #Append the current CSV to the end of the CSVs list
+        CSVList.append( pd.read_csv( CSV_directory+file , header=[1,2]) )
+        
+    #Creates a dataframe of the CSVS in CSVList
+    CSVdf = pd.concat(CSVList)
+    
+    #Combines the 1st and 2nd headers of the original CSVs into just one header - formatted as "Name_Units"
+    CSVdf.columns = CSVdf.columns.map('_'.join)
+    
+    #Returns combined CSV dataframe
+    return CSVdf
+    
+def Formatdf ( df_to_format ):
+    """Takes specified Pandas df and cleans/formats it properly."""
+    
+    #Initiates a copy of df_to_format to use during formatting, also used for output
+    formatted_df = df_to_format.copy()
+    
+    #Change datetime from an object datatype to a datetime64 datatype
+    formatted_df.columns = [it.replace('DateTime_format_month then day', 'DateTime') for it in formatted_df.columns]
+    formatted_df['DateTime'] = pd.to_datetime(formatted_df['DateTime'], format='%Y-%m-%d %H:%M:%S.%f %Z')
+
+    #Change clean torsional variable name to avoid using "=" and "/" symbols
+    formatted_df.columns = [it.replace('CleanTorsional_0=Bad/1=Good', 'CleanTorsional_ZeroBad_OneGood') for it in formatted_df.columns]
+    
+    #Adding a boolean stick slip column
+    # Converts the stickslip gradient indicator into a numpy array
+    a = np.array(formatted_df['StickSlipIndicator_N/A'].values.tolist())
+    # Utilizes numpy.where to perform a replacement of values greater than 0 with a 1
+    formatted_df['SS_Bool_1yes_0no'] = np.where(a > 0, 1, a).tolist()
+    
+    #Creating a df with problematic columns (with missing values) removed.
+    df_Removed_Columns = formatted_df[[('AbsAvg_VibeX_g'), ('AbsAvg_VibeY_g'), ('AbsAvg_VibeZ_g'), ('Avg_AccelX_g'), ('Avg_AccelY_g'), ('Avg_AccelZ_g'), ('Avg_MagX_µT'), ('Avg_MagY_µT'), ('Avg_MagZ_µT'), ('Avg_Pitch_rpm'), ('Avg_Roll_rpm'), ('Avg_Yaw_rpm'), ('AxialVibe_g'), ('CleanTorsional_ZeroBad_OneGood'), ('DateTime'), ('LateralVibe_g'), ('MaxDelta_Yaw_rpm'), ('Max_Roll_rpm'), ('Min_Roll_rpm'), ('PeakLateralVibe_g'), ('Peak_VibeX_g'), ('Peak_VibeY_g'), ('Peak_VibeZ_g'), ('SSI_Roll_rpm'), ('SpecRpm_AccelX_rpm'), ('SpecRpm_AccelZ_rpm'), ('SpecRpm_MagY_rpm'), ('SpecRpm_Roll_rpm'), ('StickSlipIndicator_N/A'), ('Temperature_°C'), ('Time_Delta_seconds'), ('TorsionalVibe_deg_per_s_sq'), ('WhirlFrequency_Hz'), ('WhirlRadius_mm'), ('Wobble_N/A') ]].copy()
+    
+    #Creating a df with problematic columns (with missing values) linearly interpolated.
+    df_Lin_Interp = formatted_df.interpolate(method='ffill')
+    
+    #-----------------Remove column if missing > 50% of values----------------------------------
+    
+    #[NOT USED]Performing cubic interpolation for missing values
+    #Has to be 1 dimensional, has to be sorted. This means iterate per each feature.
+
+    #[NOT USED]Sample code for changing a certain invalid value in a column to NaN
+    #formatted_df['Var'] = formatted_df['Var'].replace(to_replace='*****' , value = np.nan)
+
+    #[NOT USED]Sample code for converting a column to float values
+    #formatted_df['Var'] = formatted_df['Var'].astype(float)
+    
+    #[NOT USED]Sort rows by datetime & sort columns alphabetically
+    #formatted_df.columns = formatted_df.columns.sort_values()
+    #formatted_df.sort_values(by='DateTime')
+    
+    return df_Removed_Columns, df_Lin_Interp
+
+#EDA FUNCTION - Data desc, heatmaps, boxplots, distributions, correlations, important vars, target/feature determination
+def EDA ( df_for_EDA , EDA_Results_txt_filename, EDA_Results_Directory ):
+    """Takes a df, results file name, and results file directory then performs exploratory data analysis, then saves all results to specified directory."""
+    
+    #Creates a save path for the results .txt file using the given file name and directory.
+    EDA_Results_txt_SavePath = os.path.join(EDA_Results_Directory, EDA_Results_txt_filename+".txt")
+    
+    #Creates a heading in the .txt results file.
+    EDA_Results_txt = open(EDA_Results_txt_SavePath, "wt")
+    toFile = EDA_Results_txt.write('Exploratory Data Analysis .txt Report \n \n')
+    EDA_Results_txt.close()
+    
+    #Allows you to see the entire df when calling info, etc - doesn't cut it short.
+    pd.set_option("display.max_rows",None,"display.max_columns",None)
+    
+    #Writes the df shape to the results .txt file.
+    EDA_Results_txt = open(EDA_Results_txt_SavePath, "a")
+    toFile = EDA_Results_txt.write( 'df shape (Rows, Features): ' + str(df_for_EDA.shape) + '\n')
+    EDA_Results_txt.close()
+    
+    #Writes the df variable info to the results .txt file.
+    buffer = io.StringIO()
+    df_for_EDA.info(buf=buffer)
+    s = buffer.getvalue()
+    with open(EDA_Results_txt_SavePath, "a", encoding="utf-8") as f:  # doctest: +SKIP
+        f.write('\n' + 'Dataframe Variable Information: \n \n' + s + '\n')
+    
+    #Writes the number of null data points, if any.
+    EDA_Results_txt = open(EDA_Results_txt_SavePath, "a")
+    toFile = EDA_Results_txt.write( '\n df null/missing data count: ' + str(df_for_EDA.isnull().sum()) + ' data points'+ '\n')
+    EDA_Results_txt.close()
+    
+    #Writes the number of duplicate data present, if any.
+    duplicate = df_for_EDA.duplicated()
+    EDA_Results_txt = open(EDA_Results_txt_SavePath, "a")
+    toFile = EDA_Results_txt.write( '\n df duplicate data count: ' + str(duplicate.sum()) + ' data points'+ '\n')
+    EDA_Results_txt.close()
+    
+    #Writes the df head() to the results .txt file.
+    buffer = io.StringIO()
+    df_for_EDA.to_string(max_rows=5, justify='left', line_width=20, buf=buffer)
+    s = buffer.getvalue()
+    with open(EDA_Results_txt_SavePath, "a", encoding="utf-8") as f:  # doctest: +SKIP
+        f.write('\n' + 'Dataframe Head & Tail for each Variable: \n \n' + s + '\n')
+    
+    #Writes the df describe to the results .txt file.
+    s = str(df_for_EDA.describe())
+    with open(EDA_Results_txt_SavePath, "a", encoding="utf-8") as f:  # doctest: +SKIP
+        f.write('\n' + 'Dataframe Summary Statistics for each Variable: \n \n' + s + '\n')
+    
+    #Creates a null value heatmap for all variables and saves it as a .png file in the directory.
+    EDA_Null_Heatmap_SavePath = os.path.join(EDA_Results_figs_Directory, "EDA_Null_Heatmap.png")
+    plt.figure(figsize=(50,25))
+    null_heatmap = sns.heatmap(df_for_EDA.isnull(),cbar=False,yticklabels=False,cmap='viridis')
+    null_heatmap.figure.savefig(EDA_Null_Heatmap_SavePath)
+    
+    #Creates boxplots for the df and saves it as a .png file in the directory.
+    EDA_Boxplots_SavePath = os.path.join(EDA_Results_figs_Directory, "EDA_Boxplots.png")
+    plt.figure(figsize=(50,25))
+    #Return a numpy array of column values
+    L = df_for_EDA.columns.values.tolist()
+    #Removing DateTime from the Numpy Array (it is a timestamp, not a float/int.)
+    L.remove('DateTime')
+    #Create a boxplot for each variable, check for outliers
+    ColNum = 99
+    RowNum = len(L)-1/ColNum
+    plt.figure(figsize=(ColNum,8*RowNum))
+    for i in range(0,len(L)):
+        EDA_Boxplots = plt.subplot(RowNum + 1, ColNum, i+1)
+        sns.set_style('whitegrid')
+        sns.boxplot(df_for_EDA[L[i]],color='green',orient='v')
+        plt.tight_layout()
+    EDA_Boxplots.figure.savefig(EDA_Boxplots_SavePath)
+    
+    #Creates distribution graphs for the df and saves it as a .png file in the directory.
+    EDA_EDA_DistPlots_SavePath = os.path.join(EDA_Results_figs_Directory, "EDA_EDA_DistPlots.png")
+    plt.figure(figsize=(50,25))
+    #Return a numpy array of column values
+    L = df_for_EDA.columns.values.tolist()
+    #Removing DateTime from the Numpy Array (it is a timestamp, not a float/int.)
+    L.remove('DateTime')
+    #Create a distribution graph for each variable and look for skewness of features.
+    #Kernel density estimate (kde) is a useful tool for plotting the shape of a distribution.
+    plt.figure(figsize=(2*ColNum,5*RowNum))
+    for i in range(0,len(L)):
+        EDA_DistPlots = plt.subplot(RowNum+1,ColNum,i+1)
+        #Add kde=True later on to plot a gaussian kernel density estimate
+        sns.distplot(df_for_EDA[L[i]], kde = True )
+    EDA_DistPlots.figure.savefig(EDA_EDA_DistPlots_SavePath)
+    
+    #Creates correlation matrix for the df and saves it as a .png file in the directory.
+    EDA_CorMatrix_SavePath = os.path.join(EDA_Results_figs_Directory, "EDA_CorMatrix.png")
+    VarCount = 99
+    cols = df_for_EDA.corr().nlargest(VarCount, ('Temperature_°C'))[('Temperature_°C')].index
+    cm = df_for_EDA[cols].corr()
+    plt.figure(figsize=(24,16))
+    CorMatrix = sns.heatmap(cm,annot=True, cmap = 'viridis')
+    CorMatrix.figure.savefig(EDA_CorMatrix_SavePath)
+    
+    #Finds the important variables by determining the features with highest correlation with the target var.
+    #Correlation with output variable
+    cm = df_for_EDA[cols].corr()
+    cor_target_s = abs(cm['SS_Bool_1yes_0no'])
+    #Selecting highly correlated features
+    relevant_features_s = cor_target_s[cor_target_s>0.5].sort_values(ascending=False)
+    rel_feat_s_df1 = relevant_features_s.to_frame().T
+    #This takes too long.... rel_feat_w_df = NoGaps_df[list(rel_feat_w_df1.columns)]
+    #This takes too long.... rel_feat_w_df = NoGaps_df[['Wobble_N/A', 'MaxDelta_Yaw_rpm', 'AbsAvg_VibeX_g', 'Peak_VibeX_g', 'TorsionalVibe_deg_per_s_sq', 'Max_Roll_rpm', 'AxialVibe_g', 'AbsAvg_VibeY_g', 'CleanTorsional_ZeroBad_OneGood', 'Peak_VibeZ_g', 'AbsAvg_VibeZ_g', 'Avg_Roll_rpm', 'SSI_Roll_rpm', 'SpecRpm_MagY_rpm']].copy()
+    
+    EDA_Results_txt = open(EDA_Results_txt_SavePath, "a")
+    toFile = EDA_Results_txt.write( '\n df relevant feature list: ' + str(relevant_features_s) + '\n')
+    EDA_Results_txt.close()
+    #[NOT USED]Prints the dataframe formatted version of the feature list. The dataframe version was to be used for referencing later, it would only be composed of the relevant feature columns.
+    #print('Dataframe:')
+    #print(rel_feat_s_df)
+
+    #Creates scatter/cross plots of the important features and colors by the target variable.
+    EDA_PairPlot_SavePath = os.path.join(EDA_Results_figs_Directory, "EDA_PairPlot.png")
+    PairPlot = sns.pairplot(NoGaps_df, hue = 'SS_Bool_1yes_0no')
+    #[NOT USED]Trying to create pairplot of only the relevant feature data.
+    #sns.pairplot(rel_feat_w_df, hue = 'Wobble_N/A')
+    #Saves the pairplot to the directory.
+    PairPlot.figure.savefig(EDA_PairPlot_SavePath)
+    
+
+#MACHINE LEARNING FUNCTIONS
+
+def reformat_large_tick_values(tick_val, pos):
+    """
+    Turns large tick values (in the billions, millions and thousands) such as 4500 into 4.5K and also appropriately turns 4000 into 4K (no zero after the decimal).
+    """
+    if tick_val >= 1000000000:
+        val = round(tick_val/1000000000, 1)
+        new_tick_format = '{:}B'.format(val)
+    elif tick_val >= 1000000:
+        val = round(tick_val/1000000, 1)
+        new_tick_format = '{:}M'.format(val)
+    elif tick_val >= 1000:
+        val = round(tick_val/1000, 1)
+        new_tick_format = '{:}K'.format(val)
+    elif tick_val < 1000:
+        new_tick_format = round(tick_val, 1)
+    else:
+        new_tick_format = tick_val
+
+    # make new_tick_format into a string value
+    new_tick_format = str(new_tick_format)
+
+    # code below will keep 4.5M as is but change values such as 4.0M to 4M since that zero after the decimal isn't needed
+    index_of_decimal = new_tick_format.find(".")
+
+    if index_of_decimal != -1:
+        value_after_decimal = new_tick_format[index_of_decimal+1]
+        if value_after_decimal == "0":
+            # remove the 0 after the decimal point since it's not needed
+            new_tick_format = new_tick_format[0:index_of_decimal] + new_tick_format[index_of_decimal+2:]
+
+    return new_tick_format
+
+def plot_confusion_matrix(cm, classes, title='Confusion matrix', cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """        
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=0)
+    plt.yticks(tick_marks, classes)
+    
+    name = None    
+    fmt = 'd'
+    thresh = cm.max() / 2
+    # i and j tell us the coordinates of boxes
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        if i == 0 and j == 0:
+            name = "True Negatives"
+        elif i == 0 and j == 1:
+            name = "False Positives"
+        elif i == 1 and j == 1:
+            name = "True Positives"
+        else:
+            name = "False Negatives"
+        plt.text(j, i, format(cm[i, j], fmt) + "\n" + name, horizontalalignment="center", 
+                 fontsize=23, color="white" if cm[i, j] > thresh else "black")
+
+    plt.ylabel('True label', labelpad=12)
+    plt.xlabel('Predicted label', labelpad=12)
+    plt.title(title, y=1.02)
+    plt.tight_layout()
+
+
+### Logistic Regression ###
+# Drop na's or use the NoGaps_df because logistic regression will not work without it
+# The y data has to be categorical and cannot be continuous data
+def LogRegFunc ( X, y ):
+  X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.30,random_state=101)
+  logmodel = LogisticRegression()
+  logmodel.fit(X_train,y_train)
+  predictions = logmodel.predict(X_test)
+  
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ML_Results_txt_SavePath = os.path.join(ML_Results_txt_Directory, ML_Results_txt_FileName+".txt")
+    
+  #Creates a heading in the .txt results file.
+  ML_Results_txt = open(ML_Results_txt_SavePath, "wt")
+  toFile = ML_Results_txt.write('Machine Learning Algorithms .txt Report \n \n')
+  ML_Results_txt.close()
+  
+  ML_Results_txt = open(ML_Results_txt_SavePath, "a")
+  toFile = ML_Results_txt.write( 'Logistic Regression Classification Report: \n \n' + str(classification_report(y_test,predictions)) + '\n \n')
+  ML_Results_txt.close()
+    
+  #[NOT USED]Preparing for visualization
+  #[NOT USED]sns.set_context("talk")
+  #[NOT USED]sns.set_style("whitegrid", {'grid.color': '.92'})
+
+  #[NOT USED] *** Takes a long time and only outputs the last graph, but keeps all of the legend labels
+  #[NOT USED]plt.figure(figsize=(10, 8))
+  #[NOT USED]ax = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='Temperature_°C', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]bx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='AxialVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]cx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]dx = sns.scatterplot(x='AxialVibe_g', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+
+  #Creates confusion matrix save path
+  ML_LogReg_ConMatrix_SavePath = os.path.join(ML_Results_figs_Directory, "ML_LogReg_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(y_test, predictions);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ML_LogReg_ConMatrix_SavePath)
+  return predictions
+  
+### K-Nearest Neighbors ###
+def KNNFunc ( X, y ):
+  scaler = StandardScaler()
+  scaler.fit(X)
+  scaled_features = scaler.transform(X)
+  Vibs = pd.DataFrame(X)
+  X_train, X_test, y_train, y_test = train_test_split(Vibs,y,test_size=0.30)
+  knn = KNeighborsClassifier(n_neighbors=10)
+  knn.fit(X_train,y_train)
+  pred = knn.predict(X_test)
+  
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ML_Results_txt_SavePath = os.path.join(ML_Results_txt_Directory, ML_Results_txt_FileName+".txt")
+  
+  ML_Results_txt = open(ML_Results_txt_SavePath, "a")
+  toFile = ML_Results_txt.write( 'K-Nearest Neighbors Classification Report: \n \n' + str(classification_report(y_test,pred)) + '\n \n')
+  ML_Results_txt.close()
+    
+  #[NOT USED]Preparing for visualization
+  #[NOT USED]sns.set_context("talk")
+  #[NOT USED]sns.set_style("whitegrid", {'grid.color': '.92'})
+
+  #[NOT USED] *** Takes a long time and only outputs the last graph, but keeps all of the legend labels
+  #[NOT USED]plt.figure(figsize=(10, 8))
+  #[NOT USED]ax = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='Temperature_°C', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]bx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='AxialVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]cx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]dx = sns.scatterplot(x='AxialVibe_g', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+
+  #Creates confusion matrix save path
+  ML_KNN_ConMatrix_SavePath = os.path.join(ML_Results_figs_Directory, "ML_KNN_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(y_test, pred);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ML_KNN_ConMatrix_SavePath)
+  return pred
+
+#Defines a decision tree visualization function
+def visualize_tree(tree, feature_names):
+    """Create tree png using graphviz.
+
+    Args
+    ----
+    tree -- scikit-learn DecsisionTree.
+    feature_names -- list of feature names.
+    """
+    with open("dt.dot", 'w') as f:
+        export_graphviz(tree, out_file=f,
+                        feature_names=feature_names)
+
+    command = ["dot", "-Tpng", "dt.dot", "-o", "dt.png"]
+    try:
+        subprocess.check_call(command)
+    except:
+        exit("Could not run dot, ie graphviz, to "
+             "produce visualization")
+             
+### Decision Trees ###
+def DTreesFunc ( X, y ):
+  X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.30,random_state=101)
+  dtree = DecisionTreeClassifier()
+  dtree = dtree.fit(X_train, y_train)
+  predictions = dtree.predict(X_test)
+
+  #Fraction of training samples of the same class in a leaf:
+  predProb = dtree.predict_proba(X_test)
+
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ML_Results_txt_SavePath = os.path.join(ML_Results_txt_Directory, ML_Results_txt_FileName+".txt")
+  
+  ML_Results_txt = open(ML_Results_txt_SavePath, "a")
+  toFile = ML_Results_txt.write( 'Decision Trees Classification Report: \n \n' + str(classification_report(y_test,predictions)) + '\n \n')
+  ML_Results_txt.close()
+    
+  #[NOT USED]Preparing for visualization
+  #[NOT USED]sns.set_context("talk")
+  #[NOT USED]sns.set_style("whitegrid", {'grid.color': '.92'})
+
+  #[NOT USED] *** Takes a long time and only outputs the last graph, but keeps all of the legend labels
+  #[NOT USED]plt.figure(figsize=(10, 8))
+  #[NOT USED]ax = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='Temperature_°C', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]bx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='AxialVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]cx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]dx = sns.scatterplot(x='AxialVibe_g', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+
+  #Creates confusion matrix save path
+  ML_DTrees_ConMatrix_SavePath = os.path.join(ML_Results_figs_Directory, "ML_DTrees_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(y_test, predictions);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ML_DTrees_ConMatrix_SavePath)
+  return predictions
+
+### Random Forest ###
+def RandForFunc ( X, y ):
+  X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.30,random_state=101)
+  rf = RandomForestClassifier(n_estimators=500)
+  rf.fit(X_train,y_train)
+  predictions = rf.predict(X_test)
+
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ML_Results_txt_SavePath = os.path.join(ML_Results_txt_Directory, ML_Results_txt_FileName+".txt")
+  
+  ML_Results_txt = open(ML_Results_txt_SavePath, "a")
+  toFile = ML_Results_txt.write( 'Random Forest Classification Report: \n \n' + str(classification_report(y_test,predictions)) + '\n \n')
+  ML_Results_txt.close()
+    
+  #[NOT USED]Preparing for visualization
+  #[NOT USED]sns.set_context("talk")
+  #[NOT USED]sns.set_style("whitegrid", {'grid.color': '.92'})
+
+  #[NOT USED] *** Takes a long time and only outputs the last graph, but keeps all of the legend labels
+  #[NOT USED]plt.figure(figsize=(10, 8))
+  #[NOT USED]ax = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='Temperature_°C', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]bx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='AxialVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]cx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]dx = sns.scatterplot(x='AxialVibe_g', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+
+  #Creates confusion matrix save path
+  ML_RandFor_ConMatrix_SavePath = os.path.join(ML_Results_figs_Directory, "ML_RandFor_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(y_test, predictions);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ML_RandFor_ConMatrix_SavePath)
+  return predictions
+  
+### Naive Bayes ###
+def NBFunc ( X, y ):
+  X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.30,random_state=101)
+  model = BernoulliNB()
+  model.fit(X_train,y_train)
+  expected = y_test
+  predictions = model.predict(X_test)
+  
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ML_Results_txt_SavePath = os.path.join(ML_Results_txt_Directory, ML_Results_txt_FileName+".txt")
+  
+  ML_Results_txt = open(ML_Results_txt_SavePath, "a")
+  toFile = ML_Results_txt.write( 'Naive Bayes Classification Report: \n \n' + str(classification_report(expected,predictions)) + '\n \n')
+  ML_Results_txt.close()
+    
+  #[NOT USED]Preparing for visualization
+  #[NOT USED]sns.set_context("talk")
+  #[NOT USED]sns.set_style("whitegrid", {'grid.color': '.92'})
+
+  #[NOT USED] *** Takes a long time and only outputs the last graph, but keeps all of the legend labels
+  #[NOT USED]plt.figure(figsize=(10, 8))
+  #[NOT USED]ax = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='Temperature_°C', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]bx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='AxialVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]cx = sns.scatterplot(x='TorsionalVibe_deg_per_s_sq', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+  #[NOT USED]dx = sns.scatterplot(x='AxialVibe_g', y='LateralVibe_g', hue='SS_Bool_1yes_0no', data=NoGaps_df, s=200)
+
+  #Creates confusion matrix save path
+  ML_NB_ConMatrix_SavePath = os.path.join(ML_Results_figs_Directory, "ML_NB_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(expected, predictions);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ML_NB_ConMatrix_SavePath)
+  return predictions
+  
+  
+#[UNDER CONSTRUCTION]NEURAL NETWORKS FUNCTIONS - ANN & RNN
+
+### [BOOLEAN ONLY] Artificial Neural Networks ###
+# Used for classification & regression
+def ANNFunc ( X, y ):
+  # [NOT USED] Encoding categorical data        
+  # [NOT USED] labelencoder_X_2 = LabelEncoder()
+  # [NOT USED] X = labelencoder_X_2.fit_transform(X)
+
+  # Encoding the Independent Variable
+  #ct = ColumnTransformer(transformers=[('encoder', OneHotEncoder(), [1])], remainder='passthrough')
+  #X = np.array(ct.fit_transform(X))
+
+  # Splitting the dataset into the Training set and Test set
+  X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state = 0)
+
+  # Feature Scaling
+  sc = StandardScaler()
+  X_train = sc.fit_transform(X_train)
+  X_test = sc.transform(X_test)
+    
+  # Initialize ANN
+  ann = tf.keras.models.Sequential()
+    
+  # Adding Hidden Layers
+  ann.add(tf.keras.layers.Dense(units=6, activation='relu'))
+  ann.add(tf.keras.layers.Dense(units=6, activation='relu'))
+    
+  # Adding Output Layer
+  ann.add(tf.keras.layers.Dense(units=1, activation='sigmoid'))
+    
+  # Compiling the ANN
+  ann.compile(optimizer= 'adam',loss='binary_crossentropy',metrics=['accuracy'])
+    
+  # Train & Test the model
+  ann.fit(X_train,y_train,batch_size=32,epochs=100)
+  y_pred = ann.predict(X_test)
+  y_pred = (y_pred > 0.5)
+  expected = y_test
+  predictions = y_pred
+    
+  #Creates a save path for the results .txt file using the given file name and directory.
+  ANN_Results_txt_SavePath = os.path.join(ANN_Results_txt_Directory, ANN_Results_txt_FileName+".txt")
+  
+  ANN_Results_txt = open(ANN_Results_txt_SavePath, "wt")
+  toFile = ANN_Results_txt.write( 'Artificial Neural Networks Report: \n \n' + str(classification_report(expected,predictions)) + '\n \n')
+  ANN_Results_txt.close()
+    
+  #Creates confusion matrix save path
+  ANN_ConMatrix_SavePath = os.path.join(ANN_Results_figs_Directory, "ANN_ConMatrix.png")
+  
+  # Computes confusion matrix
+  cnf_matrix = confusion_matrix(expected, predictions);
+  np.set_printoptions(precision=2);
+  
+  # Plot non-normalized confusion matrix
+  plt.figure(figsize=(7, 7))
+  plt.grid(False)
+  class_names = ["No SS", "SS Present"]
+  cnf_matrix_plot = plot_confusion_matrix(cnf_matrix, classes=class_names, title='Confusion matrix, without normalization')
+  
+  #Save the figure to the confusion matrix file path
+  plt.savefig(ANN_ConMatrix_SavePath)
+  return predictions
+
+
+### Recurrent Neural Networks ###
+#Used for time series analysis
+#This will be a many to one problem for now --- Many vars to one diagnosis, SS or not.
+#This can be a many to many problem later --- Many vars to gradient diagnosis, severe/mild/no SS
+#LSTM Model
+
+### Defining Recurrent Neural Networks Functions
+#Fit and evaluate a model
+def evaluate_model(trainX, trainy, testX, testy):
+    verbose, epochs, batch_size = 0, 15, 64
+    n_timesteps, n_features, n_outputs = trainX.shape[1], trainX.shape[2], trainy.shape[1]
+    model = Sequential()
+    model.add(LSTM(100, input_shape=(n_timesteps,n_features)))
+    model.add(Dropout(0.5))
+    model.add(Dense(100, activation='relu'))
+    model.add(Dense(n_outputs, activation='softmax'))
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    # fit network
+    model.fit(trainX, trainy, epochs=epochs, batch_size=batch_size, verbose=verbose)
+    # evaluate model
+    _, accuracy = model.evaluate(testX, testy, batch_size=batch_size, verbose=0)
+    return accuracy
+
+#Summarize scores
+def summarize_results(scores):
+    print(scores)
+    m, s = mean(scores), std(scores)
+    print('Accuracy: %.3f%% (+/-%.3f)' % (m, s))
+    
+####################################################
+### MainRNN Code, needs to be made into a function. ###
+####################################################
+
+#X = NoGaps_df[['SSI_Roll_rpm', 'Wobble_N/A', 'TorsionalVibe_deg_per_s_sq']]
+#y = NoGaps_df[['CleanTorsional_ZeroBad_OneGood']]
+#X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.30,random_state=101)
+
+#Run 10 experiments
+#scores = list()
+#for r in range(10):
+    #score = evaluate_model(X_train, y_train, X_test, y_test)
+    #score = score * 100.0
+    #print('>#%d: %.3f' % (r+1, score))
+    #scores.append(score)
+#Summarize results
+#summarize_results(scores)
+
+
+#Truncate & pad input sequences?
+#max_review_length = 500
+#X_train = sequence.pad_sequences(X_train, maxlen=max_review_length)
+#X_test = sequence.pad_sequences(X_test, maxlen=max_review_length)
+
+#Creating Model
+
+#First layer, embedded layer.
+#Uses 32 length vectors to represent each word?
+#embedding_vecor_length = 32
+#model = Sequential()
+#model.add(Embedding(top_words, embedding_vecor_length, input_length=max_review_length))
+
+#Next layer, LSTM layer with 100 memory units (smart neurons)
+#model.add(LSTM(100))
+
+#Next layer, Dense output layer with a single neuron and a sigmoid activation function
+#This is to make 0 or 1 predictions for the two classes of this classification problem.
+#model.add(Dense(1, activation='sigmoid'))
+
+#Bc it is binary classification, log loss is used as the loss function (binary_corssentropy)
+#The efficient ADAM optimization is used
+#model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+#print(model.summary())
+
+#Only fit for 2 dpochs bc it can easily overfit.
+#Large batch size of 64 is used to space out weight updates
+#model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=3, batch_size=64)
+
+
+
+
+
+
+
+
+                    #################
+                ###### MAIN  CODE #######
+                    #################
+
+###########################################################
+### Combine CSVs to a Pandas dataframe from a directory ###
+###########################################################
+
+#Directory with multiple CSVs is specified
+CSVdirectory = "C:/Users/junk/OneDrive/Desktop/data/CSVFiles/"
+
+#Call CSVs2Pandas function to create combined CSV dataframe
+CSVdf = CSVs2Pandas( CSVdirectory )
+
+#####################################
+### Formatting combined dataframe ###
+#####################################
+
+#Call Formatdf to format the newly imported combined file df
+df_Removed_Columns, df_Lin_Interp = Formatdf ( CSVdf )
+
+############################################
+### Performing Exploratory Data Analysis ###
+############################################
+
+#Define result text file directory and file name
+EDA_Results_txt_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+EDA_Results_txt_FileName = "EDA_Results_txt"
+
+#Define result figures directory
+EDA_Results_figs_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+
+#Call EDA function to perform exploratory data analysis on df_Removed_Columns
+
+#Call EDA function to perform exploratory data analysis on df_Lin_Interp
+
+#########################################################
+### Calling ML Algorithms, Generating Results Reports ###
+#########################################################
+#Define results text file directory and file name
+ML_Results_txt_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+ML_Results_txt_FileName = "ML_Results_txt"
+
+#Define result figures directory
+ML_Results_figs_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+
+#Define the features and target variable
+X = df_Lin_Interp[['LateralVibe_g', 'AxialVibe_g', 'TorsionalVibe_deg_per_s_sq']]
+y = df_Lin_Interp[['SS_Bool_1yes_0no']]
+
+#Call Logistic Regression Function
+LogRegResults = LogRegFunc ( X, y )
+
+#Call K-Nearest Neighbors Function
+KNNResults = KNNFunc ( X, y )
+
+#Call Decision Trees Function
+DTreesResults = DTreesFunc ( X, y )
+
+#Call Random Forest Function
+# --- TAKES A LONG TIME (+20 minutes)
+RandForResults = RandForFunc ( X, y )
+
+#Call Naive Bayes Function
+NBResults = NBFunc ( X, y )
+
+#########################################################
+### Calling NN Algorithms, Generating Results Reports ###
+#########################################################
+#Define results text file directory and file name
+ANN_Results_txt_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+ANN_Results_txt_FileName = "ANN_Results_txt"
+
+#Define result figures directory
+ANN_Results_figs_Directory ='C:/Users/junk/OneDrive/Desktop/DrillingDysfunctionsResults/'
+
+#Define the features and target variable
+X = df_Lin_Interp[['LateralVibe_g', 'AxialVibe_g', 'TorsionalVibe_deg_per_s_sq']]
+y = df_Lin_Interp[['SS_Bool_1yes_0no']]
+
+#Call ANN Function
+ANNResults = ANNFunc ( X, y )
+
+
+
+##############################################
+### Fancy Multivariate Logistic Regression ###
+##############################################
+
+###########################################
+### Import Logistic Regression Packages ###
+###########################################
+from sklearn import linear_model
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+
+############################################
+### Define Logistic Regression Functions ###
+############################################
+
+def auc(variables, target, baseline):
+    X = baseline[variables]
+    y = basetable[target]
+    logreg = linear_model.LogisticRegression()
+    logreg.fit(X,y)
+    predictions = logreg.predict_proba(X)[:,1]
+    auc = roc_auc_score(y, predictions)
+    return auc
+## Example for this function
+#auc = auc(['age','gender'],['target'],basetable)
+#print(round(auc,2))
+
+def next_best(current_variables, candidate_variables, target, basetable):
+    best_auc = -1
+    best_variable = None
+    for v in candidate_variables:
+        auc_v = auc(current_variables + [v], target, basetable)
+        if auc_v >= best_auc:
+            best_auc = auc_v
+            best_variable = v
+    return best_variable
+## Example for this function
+#current_variables = ['age','gender']
+#candidate_variables = ['min_gift','max_gift','mean_gift']
+#next_variable = next_best(current_variables, candidate_variables, basetable)
+#print(next_variable)
+
+#####################################
+### Main Logistic Regression Code ###
+#####################################
+
+### StickSlipIndicator_N/A ###
+# Create dataframes with variables and target
+basetable = NoGaps_df
+X = basetable.drop("StickSlipIndicator_N/A", 1)
+y = basetable["StickSlipIndicator_N/A"]
+
+# Carry out 70-30 partititioning with stratification
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.7)
+
+# Create the final train and test basetables
+train = pd.concat([X_train, y_train], axis=1)
+test = pd.concat([X_test, y_test], axis=1)
+
+# Check whether train and test have same percentage targets
+print(round(sum(train['StickSlipIndicator_N/A'])/len(train), 2))
+print(round(sum(test['StickSlipIndicator_N/A'])/len(test), 2))
+
+##Plots AUC curves for test and train data, this shows you when you should stop adding variables
+# Keep track of train and test AUC values
+auc_values_train = []
+auc_values_test = []
+variables_evaluate = []
+
+# Iterate over the variables in variables
+for v in relevant_features_s:
+  
+    # Add the variable
+    variables_evaluate.append(v)
+    
+    # Calculate the train and test AUC of this set of variables
+    auc_train, auc_test = auc_train_test(variables_evaluate, ["StickSlipIndicator_N/A"], train, test)
+    
+    # Append the values to the lists
+    auc_values_train.append(auc_train)
+    auc_values_test.append(auc_test)
+    
+# Make plot of the AUC values
+x = np.array(range(0,len(auc_values_train)))
+y_train = np.array(auc_values_train)
+y_test = np.array(auc_values_test)
+plt.xticks(x, relevant_features_s, rotation = 90)
+plt.plot(x,y_train)
+plt.plot(x,y_test)
+plt.ylim((0.6, 0.8))
+plt.show()
+
+##Plots AUC curves for test and train data, this shows you when you should stop adding variables
+# Keep track of train and test AUC values
+auc_values_train = []
+auc_values_test = []
+variables_evaluate = []
+
+# Iterate over the variables in variables
+for v in variables:
+  
+    # Add the variable
+    variables_evaluate.append(v)
+    
+    # Calculate the train and test AUC of this set of variables
+    auc_train, auc_test = auc_train_test(variables_evaluate, ["target"], train, test)
+    
+    # Append the values to the lists
+    auc_values_train.append(auc_train)
+    auc_values_test.append(auc_test)
+    
+# Make plot of the AUC values
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.array(range(0,len(auc_values_train)))
+y_train = np.array(auc_values_train)
+y_test = np.array(auc_values_test)
+plt.xticks(x, variables, rotation = 90)
+plt.plot(x,y_train)
+plt.plot(x,y_test)
+plt.ylim((0.6, 0.8))
+plt.show()
